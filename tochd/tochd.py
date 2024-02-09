@@ -1,4 +1,5 @@
-#!/bin/env python
+#!/usr/bin/env python
+# coding: utf-8
 
 import signal
 import atexit
@@ -150,7 +151,7 @@ class App:
                 and '_' in path.suffix
                 and not path_as_posix == self.home_as_posix
                 and not path_as_posix == '/'
-                and not path_as_posix == Path('.').resolve().as_posix()):
+                and not path_as_posix == Path('..').resolve().as_posix()):
             shutil.rmtree(path_as_posix, ignore_errors=True)
         return path
 
