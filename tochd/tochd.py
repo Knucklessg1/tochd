@@ -16,9 +16,53 @@ import re
 from pathlib import Path
 from typing import TypeAlias
 
-
 Argparse: TypeAlias = argparse.Namespace
 CompletedProcess: TypeAlias = subprocess.CompletedProcess
+
+
+def message_job(message: str, path: Path, jobindex: int) -> None:
+    """ Print job message with correct formatting. """
+
+    pad_size: int = 12
+    pad_size = pad_size - len(str(jobindex))
+    padded_msg = message.rjust(pad_size)
+    message = f"Job {jobindex} {padded_msg}:\t{path.as_posix()}"
+    print(message, flush=True)
+    return None
+
+
+def filter_images_in_sheet_dirs(list_of_files):
+    """ Remove all image files from list within same dir as sheets. """
+
+    sheet_dirs = [f.input.parent for f in list_of_files
+                  if f.type == 'sheet']
+    if sheet_dirs:
+        filtered_list: list[File] = []
+        for file in list_of_files:
+            if (file.input.parent in sheet_dirs
+                    and file.input.suffix == '.iso'):
+                continue
+            else:
+                filtered_list.append(file)
+        return filtered_list
+    else:
+        return list_of_files
+
+
+def filter_other_in_gdi_dirs(list_of_files):
+    """ Remove all other files from list within same dir as .gdi. """
+
+    gdi_dirs = [f.input.parent for f in list_of_files
+                if f.input.suffix == '.gdi']
+    if gdi_dirs:
+        filtered_list: list[File] = []
+        for file in list_of_files:
+            if (file.input.parent not in gdi_dirs
+                    or file.input.suffix == '.gdi'):
+                filtered_list.append(file)
+        return filtered_list
+    else:
+        return list_of_files
 
 
 class App:
@@ -79,48 +123,16 @@ class App:
                     supported = self.get_supported_file(dir_entry)
                     if supported:
                         new_list.append(supported)
-        new_list = self.filter_other_in_gdi_dirs(new_list)
-        new_list = self.filter_images_in_sheet_dirs(new_list)
+        new_list = filter_other_in_gdi_dirs(new_list)
+        new_list = filter_images_in_sheet_dirs(new_list)
         return new_list
-
-    def filter_other_in_gdi_dirs(self, list_of_files):
-        """ Remove all other files from list within same dir as .gdi. """
-
-        gdi_dirs = [f.input.parent for f in list_of_files
-                    if f.input.suffix == '.gdi']
-        if gdi_dirs:
-            filtered_list: list[File] = []
-            for file in list_of_files:
-                if (file.input.parent not in gdi_dirs
-                        or file.input.suffix == '.gdi'):
-                    filtered_list.append(file)
-            return filtered_list
-        else:
-            return list_of_files
-
-    def filter_images_in_sheet_dirs(self, list_of_files):
-        """ Remove all image files from list within same dir as sheets. """
-
-        sheet_dirs = [f.input.parent for f in list_of_files
-                      if f.type == 'sheet']
-        if sheet_dirs:
-            filtered_list: list[File] = []
-            for file in list_of_files:
-                if (file.input.parent in sheet_dirs
-                        and file.input.suffix == '.iso'):
-                    continue
-                else:
-                    filtered_list.append(file)
-            return filtered_list
-        else:
-            return list_of_files
 
     def get_supported_file(self, path: Path):
         """ Transform Path to a File, if supported type and not hidden dir. """
 
         if not (self.exclude_hidden
                 and path.name.startswith('.')):
-            file: File = File(path, dir=self.output_dir)
+            file: File = File(path, directory=self.output_dir)
             if file.type:
                 return file
         return None
@@ -171,55 +183,52 @@ class App:
             stderr = None
         return subprocess.run(command, stdout=stdout, stderr=stderr, text=True)
 
-    def convert(self, file_list: list, startindex: int = 1) -> int:
+    def convert(self, file_list: list, start_index: int = 1) -> int:
         """ Convert list of files to CHD. """
-
-        lastindex: int = startindex
+        last_index: int = start_index
         if self.parallel:
             if self.threads == 0:
                 pool = multiprocessing.Pool()
             else:
                 pool = multiprocessing.Pool(processes=self.threads)
-        for jobindex, file in enumerate(file_list, startindex):
-            lastindex = jobindex + 1
+        for job_index, file in enumerate(file_list, start_index):
+            last_index = job_index + 1
             if self.dry_run:
-                self.message_job('Skipped', file.input, jobindex)
+                message_job('Skipped', file.input, job_index)
                 continue
             elif file.output.exists():
-                self.message_job('Skipped', file.input, jobindex)
+                message_job('Skipped', file.input, job_index)
                 continue
-            elif (file.type == 'image' or file.type == 'sheet'):
+            elif file.type == 'image' or file.type == 'sheet':
                 self.register_pending_temp_list(file.output)
                 if self.parallel:
-                    pool.apply_async(self.convert_file, (file, jobindex,))
+                    pool.apply_async(self.convert_file, (file, job_index,))
                 else:
-                    self.convert_file(file, jobindex)
+                    self.convert_file(file, job_index)
                 self.unregister_pending_temp_list(file.output)
-            elif (file.type == 'archive' and not file.tempdir.exists()):
+            elif file.type == 'archive' and not file.tempdir.exists():
                 if file.tempdir:
                     self.register_pending_temp_list(file.tempdir)
                 self.register_pending_temp_list(file.output)
                 if self.parallel:
-                    pool.apply_async(self.convert_archive, (file, jobindex,))
+                    pool.apply_async(self.convert_archive, (file, job_index,))
                 else:
-                    self.convert_archive(file, jobindex)
+                    self.convert_archive(file, job_index)
                 self.unregister_pending_temp_list(file.output)
             else:
-                self.message_job('Skipped', file.input, jobindex)
+                message_job('Skipped', file.input, job_index)
                 continue
         if self.parallel:
             pool.close()
             pool.join()
-        return lastindex
+        return last_index
 
     def convert_file(self, file, jobindex: int) -> CompletedProcess:
         """ Convert File to CHD executing chdman. """
 
         if jobindex:
-            self.message_job('Started', file.input, jobindex)
-        command: list[str] = []
-        command.append(self.programs['chdman'].as_posix())
-        command.append('createcd')
+            message_job('Started', file.input, jobindex)
+        command: list[str] = [self.programs['chdman'].as_posix(), 'createcd']
         if self.fast:
             command.append('--compression')
             # none=Uncompressed, cdlz=CD LZMA, cdzl=CD Deflate, cdfl=CD FLAC
@@ -235,35 +244,33 @@ class App:
         completed = self.run_convert_process(command)
         if jobindex:
             if completed.returncode == 0 and file.output.exists():
-                self.message_job('Completed', file.output, jobindex)
+                message_job('Completed', file.output, jobindex)
             else:
                 file.output.unlink(missing_ok=True)
-                self.message_job('Failed', file.output, jobindex)
+                message_job('Failed', file.output, jobindex)
         return completed
 
     def convert_archive(self, archive,
                         jobindex: int) -> CompletedProcess | None:
         """ Extract and convert an archive to CHD. """
 
-        self.message_job('Started', archive.input, jobindex)
+        message_job('Started', archive.input, jobindex)
         archlist: list[File] = self.listing_from_archive(archive)
         archlist = [f for f in archlist
                     if f.type == 'image'
                     or f.type == 'sheet']
-        archlist = self.filter_other_in_gdi_dirs(archlist)
-        archlist = self.filter_images_in_sheet_dirs(archlist)
+        archlist = filter_other_in_gdi_dirs(archlist)
+        archlist = filter_images_in_sheet_dirs(archlist)
         # workaround
         if [f for f in archlist if f.type == 'sheet']:
             archlist = [f for f in archlist if not f.input.suffix == '.iso']
 
         if not archlist:
-            self.message_job('Failed', archive.output, jobindex)
+            message_job('Failed', archive.output, jobindex)
             return None
 
         self.register_pending_temp_list(archive.tempdir)
-        command: list[str] = []
-        command.append(self.programs['7z'].as_posix())
-        command.append('x')
+        command: list[str] = [self.programs['7z'].as_posix(), 'x']
         if self.quiet or self.parallel:
             command.append('-y')
         if self.parallel:
@@ -283,11 +290,11 @@ class App:
                 if completed.returncode == 0:
                     shutil.move(file.output.as_posix(), dest_path.as_posix())
                     if dest_path.exists():
-                        self.message_job('Completed', dest_path, jobindex)
+                        message_job('Completed', dest_path, jobindex)
                 else:
-                    self.message_job('Failed', dest_path, jobindex)
+                    message_job('Failed', dest_path, jobindex)
         else:
-            self.message_job('Failed', archive.output, jobindex)
+            message_job('Failed', archive.output, jobindex)
 
         self.delete_temp_dir(archive.tempdir)
         return completed
@@ -295,12 +302,7 @@ class App:
     def listing_from_archive(self, file) -> list:
         """ Get a list of all paths in archive as File. """
 
-        command: list[str] = []
-        command.append(self.programs['7z'].as_posix())
-        command.append('l')
-        command.append('-slt')
-        command.append('-y')
-        command.append(file.input.as_posix())
+        command: list[str] = [self.programs['7z'].as_posix(), 'l', '-slt', '-y', file.input.as_posix()]
 
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode == 0:
@@ -309,16 +311,6 @@ class App:
             return [File(file.tempdir / Path(entry)) for entry in listing[1:]]
         else:
             return []
-
-    def message_job(self, message: str, path: Path, jobindex: int) -> None:
-        """ Print job message with correct formatting. """
-
-        pad_size: int = 12
-        pad_size = pad_size - len(str(jobindex))
-        padded_msg = message.rjust(pad_size)
-        message = f"Job {jobindex} {padded_msg}:\t{path.as_posix()}"
-        print(message, flush=True)
-        return None
 
     @classmethod
     def which(cls, command: str) -> Path:
@@ -343,14 +335,14 @@ class App:
         """ Check if path is an existing dir and get fullpath. """
 
         if path:
-            dir: Path = fullpath(path)
-            if not dir.exists():
-                raise FileNotFoundError(dir)
-            elif not dir.is_dir():
-                raise NotADirectoryError(dir)
-            elif not os.access(dir, os.W_OK):
-                raise PermissionError(dir)
-            return dir
+            directory: Path = fullpath(path)
+            if not directory.exists():
+                raise FileNotFoundError(directory)
+            elif not directory.is_dir():
+                raise NotADirectoryError(directory)
+            elif not os.access(directory, os.W_OK):
+                raise PermissionError(directory)
+            return directory
         else:
             return None
 
@@ -360,23 +352,23 @@ class App:
 
         if path.suffix:
             suffix: str = path.suffix.lower().lstrip('.')
-            for type, extensions in App.types.items():
+            for extension_type, extensions in App.types.items():
                 if suffix in extensions:
-                    return type
+                    return extension_type
         return None
 
 
 class File:
     """ Transforms a Path to File object with additional attributes. """
 
-    def __init__(self, input: Path, dir: Path | None = None):
+    def __init__(self, input_path: Path, directory: Path | None = None):
         """ Constructs File attributes. """
 
-        self.input: Path = input
-        if dir:
-            output = dir.joinpath(input.name)
+        self.input: Path = input_path
+        if directory:
+            output = directory.joinpath(input_path.name)
         else:
-            output = input
+            output = input_path
         self.output: Path = output.with_suffix('.chd')
         self.tempdir: Path | None = None
         self.type: str | None = App.match_type(self.input)
@@ -405,7 +397,7 @@ def fullpath(file: str) -> Path:
     return path
 
 
-def cpucount() -> int:
+def cpu_count() -> int:
     """ Get actual count of CPU number. """
 
     count = os.cpu_count()
@@ -431,7 +423,7 @@ def parse_arguments(args: list[str] | None = None) -> Argparse:
     """ Programs CLI options. """
 
     parser = argparse.ArgumentParser(
-        description=('Convert game ISO and archives to CD CHD for emulation.'),
+        description='Convert game ISO and archives to CD CHD for emulation.',
         epilog=('Copyright © 2022 Tuncay D. '
                 '<https://github.com/thingsiplay/tochd>')
     )
@@ -525,7 +517,7 @@ def parse_arguments(args: list[str] | None = None) -> Argparse:
         metavar='NUM',
         default=2,
         type=int,
-        choices=range(0, cpucount()),
+        choices=range(0, cpu_count()),
         help=('max number of threaded processes to run in parallel, requires '
               'option "-p" to be active, "0" is count of all cores '
               f'(available: {os.cpu_count()}), defaults to "2"')
@@ -536,11 +528,11 @@ def parse_arguments(args: list[str] | None = None) -> Argparse:
         metavar='NUM',
         default=0,
         type=int,
-        choices=range(0, cpucount()),
+        choices=range(0, cpu_count()),
         help=('limit the number of processor cores to utilize during '
-            'creation of the CHD files with "chdman" for each thread, '
-            f'0 will not limit the cores (available: {os.cpu_count()}), '
-            'defaults to "0"')
+              'creation of the CHD files with "chdman" for each thread, '
+              f'0 will not limit the cores (available: {os.cpu_count()}), '
+              'defaults to "0"')
     )
 
     parser.add_argument(
@@ -604,20 +596,20 @@ def main(args: list[str] | None = None) -> int:
             stdin = ''
         return f'$ {stdin}{app.name} {arguments}'
 
-    def signal_SIGINT(*args):
+    def signal_sigint(*args):
         """ Shutdown clean and gracefully on Ctrl+c keyboard interruption. """
 
-        app.clean_pending_temp_list
+        app.clean_pending_temp_list()
         try:
             sys.exit(3)
         except SystemExit:
             if app.emergency_break:
                 sys.exit(255)
 
-    def signal_SIGTERM(*args):
+    def signal_sigterm(*args):
         """ Forcefully shutdown on TERM signal. May leave unfinished files. """
 
-        app.clean_pending_temp_list
+        app.clean_pending_temp_list()
         sys.exit(255)
 
     app: App
@@ -628,9 +620,9 @@ def main(args: list[str] | None = None) -> int:
     else:
         app = App(parse_arguments(args))
 
-    atexit.register(signal_SIGINT)
-    signal.signal(signal.SIGTERM, signal_SIGTERM)
-    signal.signal(signal.SIGINT, signal_SIGINT)
+    atexit.register(signal_sigint)
+    signal.signal(signal.SIGTERM, signal_sigterm)
+    signal.signal(signal.SIGINT, signal_sigint)
 
     if app.print_version:
         if app.frozen:
@@ -659,7 +651,7 @@ def main(args: list[str] | None = None) -> int:
         print(example('-', stdin='ls -1'))
         return 0
 
-    app.convert(app.files, startindex=1)
+    app.convert(app.files, start_index=1)
     return 0
 
 
